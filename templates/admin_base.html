@@ -33,6 +33,36 @@
             font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
             background-color: #F9FAFB;
             overflow-x: hidden;
+            font-size: 13px; /* Reduced base font size */
+        }
+
+        /* Floating Expand Button */
+        .floating-expand {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            width: 50px;
+            height: 50px;
+            background: var(--primary-color);
+            color: white;
+            border: none;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            z-index: 1000;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+            transition: all 0.3s ease;
+        }
+
+        .floating-expand:hover {
+            transform: scale(1.1);
+            box-shadow: 0 6px 16px rgba(0,0,0,0.2);
+        }
+
+        .floating-expand.fullscreen {
+            background: var(--secondary-color);
         }
 
         /* Sidebar Styles */
@@ -55,7 +85,7 @@
         }
 
         .sidebar-brand {
-            padding: 20px;
+            padding: 15px; /* Reduced padding */
             border-bottom: 1px solid rgba(255, 255, 255, 0.1);
             display: flex;
             align-items: center;
@@ -63,44 +93,45 @@
         }
 
         .sidebar-brand i {
-            font-size: 28px;
+            font-size: 22px; /* Reduced icon size */
             color: var(--secondary-color);
         }
 
         .sidebar-brand h4 {
             margin: 0;
             font-weight: 700;
-            font-size: 20px;
+            font-size: 16px; /* Reduced font size */
         }
 
         .sidebar-menu {
-            padding: 20px 0;
+            padding: 15px 0; /* Reduced padding */
         }
 
         .menu-section {
-            margin-bottom: 30px;
+            margin-bottom: 20px; /* Reduced margin */
         }
 
         .menu-label {
-            padding: 0 20px;
-            font-size: 11px;
+            padding: 0 15px; /* Reduced padding */
+            font-size: 10px; /* Reduced font size */
             text-transform: uppercase;
             color: var(--text-muted);
             font-weight: 600;
             letter-spacing: 1px;
-            margin-bottom: 10px;
+            margin-bottom: 8px; /* Reduced margin */
         }
 
         .menu-item {
-            padding: 12px 20px;
+            padding: 10px 15px; /* Reduced padding */
             color: #D1D5DB;
             text-decoration: none;
             display: flex;
             align-items: center;
-            gap: 12px;
+            gap: 10px; /* Reduced gap */
             transition: all 0.2s;
             cursor: pointer;
             position: relative;
+            font-size: 13px; /* Reduced font size */
         }
 
         .menu-item:hover {
@@ -119,13 +150,13 @@
             left: 0;
             top: 0;
             bottom: 0;
-            width: 4px;
+            width: 3px; /* Reduced width */
             background: white;
         }
 
         .menu-item i {
-            font-size: 18px;
-            width: 20px;
+            font-size: 16px; /* Reduced icon size */
+            width: 18px; /* Reduced width */
         }
 
         .menu-item span {
@@ -133,13 +164,13 @@
         }
 
         .menu-item .badge {
-            font-size: 10px;
-            padding: 3px 8px;
+            font-size: 9px; /* Reduced font size */
+            padding: 2px 6px; /* Reduced padding */
         }
 
         .submenu {
             display: none;
-            padding-left: 20px;
+            padding-left: 15px; /* Reduced padding */
         }
 
         .submenu.show {
@@ -147,12 +178,13 @@
         }
 
         .submenu .menu-item {
-            padding: 8px 20px;
-            font-size: 14px;
+            padding: 6px 15px; /* Reduced padding */
+            font-size: 12px; /* Reduced font size */
         }
 
         .menu-item .arrow {
             transition: transform 0.3s;
+            font-size: 12px; /* Reduced arrow size */
         }
 
         .menu-item.expanded .arrow {
@@ -171,7 +203,7 @@
             display: flex;
             align-items: center;
             justify-content: space-between;
-            padding: 0 30px;
+            padding: 0 25px; /* Reduced padding */
             z-index: 1030;
             transition: left 0.3s ease;
         }
@@ -183,11 +215,11 @@
         .header-left {
             display: flex;
             align-items: center;
-            gap: 20px;
+            gap: 15px; /* Reduced gap */
         }
 
         .menu-toggle {
-            font-size: 24px;
+            font-size: 20px; /* Reduced font size */
             cursor: pointer;
             color: #374151;
             background: none;
@@ -196,36 +228,37 @@
 
         .search-box {
             position: relative;
-            width: 350px;
+            width: 300px; /* Reduced width */
         }
 
         .search-box input {
             width: 100%;
-            padding: 10px 15px 10px 40px;
+            padding: 8px 12px 8px 35px; /* Reduced padding */
             border: 1px solid #E5E7EB;
-            border-radius: 8px;
-            font-size: 14px;
+            border-radius: 6px;
+            font-size: 13px; /* Reduced font size */
         }
 
         .search-box i {
             position: absolute;
-            left: 15px;
+            left: 12px; /* Adjusted position */
             top: 50%;
             transform: translateY(-50%);
             color: #9CA3AF;
+            font-size: 14px; /* Reduced icon size */
         }
 
         .header-right {
             display: flex;
             align-items: center;
-            gap: 20px;
+            gap: 15px; /* Reduced gap */
         }
 
         .header-icon {
             position: relative;
-            width: 40px;
-            height: 40px;
-            border-radius: 8px;
+            width: 36px; /* Reduced size */
+            height: 36px; /* Reduced size */
+            border-radius: 6px;
             display: flex;
             align-items: center;
             justify-content: center;
@@ -240,19 +273,19 @@
 
         .header-icon .badge {
             position: absolute;
-            top: -5px;
-            right: -5px;
-            font-size: 10px;
-            padding: 3px 6px;
+            top: -4px; /* Adjusted position */
+            right: -4px; /* Adjusted position */
+            font-size: 9px; /* Reduced font size */
+            padding: 2px 5px; /* Reduced padding */
         }
 
         .user-profile {
             display: flex;
             align-items: center;
-            gap: 12px;
+            gap: 10px; /* Reduced gap */
             cursor: pointer;
-            padding: 5px 10px;
-            border-radius: 8px;
+            padding: 4px 8px; /* Reduced padding */
+            border-radius: 6px;
             transition: all 0.2s;
         }
 
@@ -261,8 +294,8 @@
         }
 
         .user-avatar {
-            width: 40px;
-            height: 40px;
+            width: 36px; /* Reduced size */
+            height: 36px; /* Reduced size */
             border-radius: 50%;
             background: linear-gradient(135deg, var(--primary-color), var(--secondary-color));
             display: flex;
@@ -270,6 +303,7 @@
             justify-content: center;
             color: white;
             font-weight: 600;
+            font-size: 13px; /* Reduced font size */
         }
 
         .user-info {
@@ -279,12 +313,12 @@
 
         .user-name {
             font-weight: 600;
-            font-size: 14px;
+            font-size: 13px; /* Reduced font size */
             color: #111827;
         }
 
         .user-role {
-            font-size: 12px;
+            font-size: 11px; /* Reduced font size */
             color: #6B7280;
         }
 
@@ -292,13 +326,31 @@
         .main-content {
             margin-left: var(--sidebar-width);
             margin-top: var(--header-height);
-            padding: 30px;
+            padding: 20px; /* Reduced padding */
             min-height: calc(100vh - var(--header-height));
             transition: margin-left 0.3s ease;
         }
 
         .main-content.full-width {
             margin-left: 0;
+        }
+
+        /* Fullscreen mode */
+        body.fullscreen-mode {
+            overflow: hidden;
+        }
+
+        body.fullscreen-mode .sidebar,
+        body.fullscreen-mode .header {
+            display: none;
+        }
+
+        body.fullscreen-mode .main-content {
+            margin-left: 0;
+            margin-top: 0;
+            padding: 10px; /* Reduced padding in fullscreen */
+            height: 100vh;
+            overflow: auto;
         }
 
         /* Overlay for mobile */
@@ -342,6 +394,13 @@
             .user-info {
                 display: none;
             }
+
+            .floating-expand {
+                bottom: 15px;
+                right: 15px;
+                width: 45px;
+                height: 45px;
+            }
         }
 
         @media (max-width: 576px) {
@@ -360,7 +419,7 @@
 
         /* Scrollbar */
         .sidebar::-webkit-scrollbar {
-            width: 6px;
+            width: 5px; /* Reduced width */
         }
 
         .sidebar::-webkit-scrollbar-track {
@@ -369,7 +428,7 @@
 
         .sidebar::-webkit-scrollbar-thumb {
             background: rgba(255, 255, 255, 0.2);
-            border-radius: 3px;
+            border-radius: 2px; /* Reduced radius */
         }
 
         .sidebar::-webkit-scrollbar-thumb:hover {
@@ -549,12 +608,12 @@
 
         <div class="header-right">
             <div class="header-icon">
-                <i class="bi bi-bell" style="font-size: 20px;"></i>
+                <i class="bi bi-bell"></i>
                 <span class="badge bg-danger">5</span>
             </div>
 
             <div class="header-icon d-md-none">
-                <i class="bi bi-search" style="font-size: 20px;"></i>
+                <i class="bi bi-search"></i>
             </div>
 
             <div class="user-profile">
@@ -575,11 +634,42 @@
         {% endblock %}
     </main>
 
+    <!-- Floating Expand Button -->
+    <button class="floating-expand" id="floatingExpand" title="Toggle Fullscreen">
+        <i class="bi bi-arrows-fullscreen" id="expandIcon"></i>
+    </button>
+
     <!-- Bootstrap JS -->
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     
     <!-- Custom JS -->
     <script>
+        // Check for saved fullscreen state
+        function checkFullscreenState() {
+            const isFullscreen = localStorage.getItem('fullscreenMode') === 'true';
+            if (isFullscreen) {
+                toggleFullscreen();
+            }
+        }
+
+        // Toggle Fullscreen
+        function toggleFullscreen() {
+            const body = document.body;
+            const expandBtn = document.getElementById('floatingExpand');
+            const expandIcon = document.getElementById('expandIcon');
+            
+            body.classList.toggle('fullscreen-mode');
+            expandBtn.classList.toggle('fullscreen');
+            
+            if (body.classList.contains('fullscreen-mode')) {
+                expandIcon.className = 'bi bi-fullscreen-exit';
+                localStorage.setItem('fullscreenMode', 'true');
+            } else {
+                expandIcon.className = 'bi bi-arrows-fullscreen';
+                localStorage.setItem('fullscreenMode', 'false');
+            }
+        }
+
         // Toggle Sidebar
         function toggleSidebar() {
             const sidebar = document.getElementById('sidebar');
@@ -642,6 +732,12 @@
                     this.classList.add('active');
                 }
             });
+        });
+
+        // Initialize
+        document.addEventListener('DOMContentLoaded', function() {
+            checkFullscreenState();
+            document.getElementById('floatingExpand').addEventListener('click', toggleFullscreen);
         });
     </script>
 
