@@ -1,0 +1,650 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}RetailFlow - Admin Dashboard{% endblock %}</title>
+    
+    <!-- Bootstrap CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    
+    <!-- Bootstrap Icons -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css">
+    
+    <!-- Custom CSS -->
+    <style>
+        :root {
+            --sidebar-width: 260px;
+            --header-height: 70px;
+            --primary-color: #4F46E5;
+            --secondary-color: #F97316;
+            --sidebar-bg: #1F2937;
+            --sidebar-hover: #374151;
+            --text-muted: #9CA3AF;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background-color: #F9FAFB;
+            overflow-x: hidden;
+        }
+
+        /* Sidebar Styles */
+        .sidebar {
+            position: fixed;
+            left: 0;
+            top: 0;
+            width: var(--sidebar-width);
+            height: 100vh;
+            background: var(--sidebar-bg);
+            color: white;
+            transition: transform 0.3s ease;
+            z-index: 1040;
+            overflow-y: auto;
+            overflow-x: hidden;
+        }
+
+        .sidebar.closed {
+            transform: translateX(-100%);
+        }
+
+        .sidebar-brand {
+            padding: 20px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .sidebar-brand i {
+            font-size: 28px;
+            color: var(--secondary-color);
+        }
+
+        .sidebar-brand h4 {
+            margin: 0;
+            font-weight: 700;
+            font-size: 20px;
+        }
+
+        .sidebar-menu {
+            padding: 20px 0;
+        }
+
+        .menu-section {
+            margin-bottom: 30px;
+        }
+
+        .menu-label {
+            padding: 0 20px;
+            font-size: 11px;
+            text-transform: uppercase;
+            color: var(--text-muted);
+            font-weight: 600;
+            letter-spacing: 1px;
+            margin-bottom: 10px;
+        }
+
+        .menu-item {
+            padding: 12px 20px;
+            color: #D1D5DB;
+            text-decoration: none;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            transition: all 0.2s;
+            cursor: pointer;
+            position: relative;
+        }
+
+        .menu-item:hover {
+            background: var(--sidebar-hover);
+            color: white;
+        }
+
+        .menu-item.active {
+            background: linear-gradient(90deg, var(--primary-color) 0%, var(--primary-color) 100%);
+            color: white;
+        }
+
+        .menu-item.active::before {
+            content: '';
+            position: absolute;
+            left: 0;
+            top: 0;
+            bottom: 0;
+            width: 4px;
+            background: white;
+        }
+
+        .menu-item i {
+            font-size: 18px;
+            width: 20px;
+        }
+
+        .menu-item span {
+            flex: 1;
+        }
+
+        .menu-item .badge {
+            font-size: 10px;
+            padding: 3px 8px;
+        }
+
+        .submenu {
+            display: none;
+            padding-left: 20px;
+        }
+
+        .submenu.show {
+            display: block;
+        }
+
+        .submenu .menu-item {
+            padding: 8px 20px;
+            font-size: 14px;
+        }
+
+        .menu-item .arrow {
+            transition: transform 0.3s;
+        }
+
+        .menu-item.expanded .arrow {
+            transform: rotate(90deg);
+        }
+
+        /* Header Styles */
+        .header {
+            position: fixed;
+            top: 0;
+            left: var(--sidebar-width);
+            right: 0;
+            height: var(--header-height);
+            background: white;
+            border-bottom: 1px solid #E5E7EB;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 30px;
+            z-index: 1030;
+            transition: left 0.3s ease;
+        }
+
+        .header.full-width {
+            left: 0;
+        }
+
+        .header-left {
+            display: flex;
+            align-items: center;
+            gap: 20px;
+        }
+
+        .menu-toggle {
+            font-size: 24px;
+            cursor: pointer;
+            color: #374151;
+            background: none;
+            border: none;
+        }
+
+        .search-box {
+            position: relative;
+            width: 350px;
+        }
+
+        .search-box input {
+            width: 100%;
+            padding: 10px 15px 10px 40px;
+            border: 1px solid #E5E7EB;
+            border-radius: 8px;
+            font-size: 14px;
+        }
+
+        .search-box i {
+            position: absolute;
+            left: 15px;
+            top: 50%;
+            transform: translateY(-50%);
+            color: #9CA3AF;
+        }
+
+        .header-right {
+            display: flex;
+            align-items: center;
+            gap: 20px;
+        }
+
+        .header-icon {
+            position: relative;
+            width: 40px;
+            height: 40px;
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            transition: all 0.2s;
+            color: #6B7280;
+        }
+
+        .header-icon:hover {
+            background: #F3F4F6;
+        }
+
+        .header-icon .badge {
+            position: absolute;
+            top: -5px;
+            right: -5px;
+            font-size: 10px;
+            padding: 3px 6px;
+        }
+
+        .user-profile {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            cursor: pointer;
+            padding: 5px 10px;
+            border-radius: 8px;
+            transition: all 0.2s;
+        }
+
+        .user-profile:hover {
+            background: #F3F4F6;
+        }
+
+        .user-avatar {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, var(--primary-color), var(--secondary-color));
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: 600;
+        }
+
+        .user-info {
+            display: flex;
+            flex-direction: column;
+        }
+
+        .user-name {
+            font-weight: 600;
+            font-size: 14px;
+            color: #111827;
+        }
+
+        .user-role {
+            font-size: 12px;
+            color: #6B7280;
+        }
+
+        /* Main Content */
+        .main-content {
+            margin-left: var(--sidebar-width);
+            margin-top: var(--header-height);
+            padding: 30px;
+            min-height: calc(100vh - var(--header-height));
+            transition: margin-left 0.3s ease;
+        }
+
+        .main-content.full-width {
+            margin-left: 0;
+        }
+
+        /* Overlay for mobile */
+        .sidebar-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.5);
+            z-index: 1035;
+            display: none;
+        }
+
+        .sidebar-overlay.show {
+            display: block;
+        }
+
+        /* Responsive */
+        @media (max-width: 768px) {
+            .sidebar {
+                transform: translateX(-100%);
+            }
+
+            .sidebar.open {
+                transform: translateX(0);
+            }
+
+            .header {
+                left: 0;
+            }
+
+            .main-content {
+                margin-left: 0;
+            }
+
+            .search-box {
+                display: none;
+            }
+
+            .user-info {
+                display: none;
+            }
+        }
+
+        @media (max-width: 576px) {
+            .header {
+                padding: 0 15px;
+            }
+
+            .main-content {
+                padding: 15px;
+            }
+
+            .header-right {
+                gap: 10px;
+            }
+        }
+
+        /* Scrollbar */
+        .sidebar::-webkit-scrollbar {
+            width: 6px;
+        }
+
+        .sidebar::-webkit-scrollbar-track {
+            background: transparent;
+        }
+
+        .sidebar::-webkit-scrollbar-thumb {
+            background: rgba(255, 255, 255, 0.2);
+            border-radius: 3px;
+        }
+
+        .sidebar::-webkit-scrollbar-thumb:hover {
+            background: rgba(255, 255, 255, 0.3);
+        }
+    </style>
+    
+    {% block extra_css %}{% endblock %}
+</head>
+<body>
+
+    <!-- Sidebar -->
+    <div class="sidebar" id="sidebar">
+        <div class="sidebar-brand">
+            <i class="bi bi-shop"></i>
+            <h4>RetailFlow</h4>
+        </div>
+
+        <div class="sidebar-menu">
+            <!-- Main Menu -->
+            <div class="menu-section">
+                <div class="menu-label">Main Menu</div>
+                <a href="#" class="menu-item active">
+                    <i class="bi bi-grid-fill"></i>
+                    <span>Dashboard</span>
+                </a>
+                <a href="#" class="menu-item">
+                    <i class="bi bi-speedometer2"></i>
+                    <span>Analytics</span>
+                </a>
+            </div>
+
+            <!-- Sales -->
+            <div class="menu-section">
+                <div class="menu-label">Sales</div>
+                <a href="#" class="menu-item" onclick="toggleSubmenu(event, 'pos-menu')">
+                    <i class="bi bi-calculator"></i>
+                    <span>POS</span>
+                    <i class="bi bi-chevron-right arrow"></i>
+                </a>
+                <div class="submenu" id="pos-menu">
+                    <a href="#" class="menu-item">
+                        <i class="bi bi-plus-circle"></i>
+                        <span>New Sale</span>
+                    </a>
+                    <a href="#" class="menu-item">
+                        <i class="bi bi-list-ul"></i>
+                        <span>Sales History</span>
+                    </a>
+                    <a href="#" class="menu-item">
+                        <i class="bi bi-receipt"></i>
+                        <span>Invoices</span>
+                    </a>
+                </div>
+
+                <a href="#" class="menu-item">
+                    <i class="bi bi-people"></i>
+                    <span>Customers</span>
+                    <span class="badge bg-primary">342</span>
+                </a>
+                <a href="#" class="menu-item">
+                    <i class="bi bi-arrow-return-left"></i>
+                    <span>Returns</span>
+                </a>
+            </div>
+
+            <!-- Inventory -->
+            <div class="menu-section">
+                <div class="menu-label">Inventory</div>
+                <a href="#" class="menu-item" onclick="toggleSubmenu(event, 'products-menu')">
+                    <i class="bi bi-box-seam"></i>
+                    <span>Products</span>
+                    <i class="bi bi-chevron-right arrow"></i>
+                </a>
+                <div class="submenu" id="products-menu">
+                    <a href="#" class="menu-item">
+                        <i class="bi bi-plus-circle"></i>
+                        <span>Add Product</span>
+                    </a>
+                    <a href="#" class="menu-item">
+                        <i class="bi bi-list-ul"></i>
+                        <span>All Products</span>
+                    </a>
+                    <a href="#" class="menu-item">
+                        <i class="bi bi-tag"></i>
+                        <span>Categories</span>
+                    </a>
+                    <a href="#" class="menu-item">
+                        <i class="bi bi-exclamation-triangle"></i>
+                        <span>Low Stock</span>
+                        <span class="badge bg-danger">12</span>
+                    </a>
+                </div>
+
+                <a href="#" class="menu-item">
+                    <i class="bi bi-arrow-down-circle"></i>
+                    <span>Stock</span>
+                </a>
+                <a href="#" class="menu-item">
+                    <i class="bi bi-truck"></i>
+                    <span>Suppliers</span>
+                </a>
+                <a href="#" class="menu-item">
+                    <i class="bi bi-cart-plus"></i>
+                    <span>Purchase Orders</span>
+                </a>
+            </div>
+
+            <!-- Finance -->
+            <div class="menu-section">
+                <div class="menu-label">Finance</div>
+                <a href="#" class="menu-item">
+                    <i class="bi bi-credit-card"></i>
+                    <span>Payments</span>
+                </a>
+                <a href="#" class="menu-item">
+                    <i class="bi bi-wallet2"></i>
+                    <span>Expenses</span>
+                </a>
+                <a href="#" class="menu-item">
+                    <i class="bi bi-cash-coin"></i>
+                    <span>M-Pesa</span>
+                </a>
+            </div>
+
+            <!-- Reports -->
+            <div class="menu-section">
+                <div class="menu-label">Reports</div>
+                <a href="#" class="menu-item">
+                    <i class="bi bi-bar-chart"></i>
+                    <span>Sales Reports</span>
+                </a>
+                <a href="#" class="menu-item">
+                    <i class="bi bi-graph-up"></i>
+                    <span>Profit & Loss</span>
+                </a>
+                <a href="#" class="menu-item">
+                    <i class="bi bi-clock-history"></i>
+                    <span>Shifts</span>
+                </a>
+            </div>
+
+            <!-- Settings -->
+            <div class="menu-section">
+                <div class="menu-label">Settings</div>
+                <a href="#" class="menu-item">
+                    <i class="bi bi-people-fill"></i>
+                    <span>Users & Roles</span>
+                </a>
+                <a href="#" class="menu-item">
+                    <i class="bi bi-building"></i>
+                    <span>Branches</span>
+                </a>
+                <a href="#" class="menu-item">
+                    <i class="bi bi-gear"></i>
+                    <span>Settings</span>
+                </a>
+            </div>
+        </div>
+    </div>
+
+    <!-- Sidebar Overlay -->
+    <div class="sidebar-overlay" id="sidebarOverlay" onclick="toggleSidebar()"></div>
+
+    <!-- Header -->
+    <header class="header" id="header">
+        <div class="header-left">
+            <button class="menu-toggle" onclick="toggleSidebar()">
+                <i class="bi bi-list"></i>
+            </button>
+            
+            <div class="search-box">
+                <i class="bi bi-search"></i>
+                <input type="text" placeholder="Search products, customers, invoices...">
+            </div>
+        </div>
+
+        <div class="header-right">
+            <div class="header-icon">
+                <i class="bi bi-bell" style="font-size: 20px;"></i>
+                <span class="badge bg-danger">5</span>
+            </div>
+
+            <div class="header-icon d-md-none">
+                <i class="bi bi-search" style="font-size: 20px;"></i>
+            </div>
+
+            <div class="user-profile">
+                <div class="user-avatar">AD</div>
+                <div class="user-info">
+                    <div class="user-name">Admin User</div>
+                    <div class="user-role">Super Admin</div>
+                </div>
+                <i class="bi bi-chevron-down"></i>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Content -->
+    <main class="main-content" id="mainContent">
+        {% block content %}
+        <!-- Page content goes here -->
+        {% endblock %}
+    </main>
+
+    <!-- Bootstrap JS -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    
+    <!-- Custom JS -->
+    <script>
+        // Toggle Sidebar
+        function toggleSidebar() {
+            const sidebar = document.getElementById('sidebar');
+            const overlay = document.getElementById('sidebarOverlay');
+            const header = document.getElementById('header');
+            const mainContent = document.getElementById('mainContent');
+            
+            if (window.innerWidth <= 768) {
+                // Mobile behavior
+                sidebar.classList.toggle('open');
+                overlay.classList.toggle('show');
+            } else {
+                // Desktop behavior
+                sidebar.classList.toggle('closed');
+                header.classList.toggle('full-width');
+                mainContent.classList.toggle('full-width');
+            }
+        }
+
+        // Toggle Submenu
+        function toggleSubmenu(event, submenuId) {
+            event.preventDefault();
+            const menuItem = event.currentTarget;
+            const submenu = document.getElementById(submenuId);
+            
+            menuItem.classList.toggle('expanded');
+            submenu.classList.toggle('show');
+        }
+
+        // Close sidebar on overlay click (mobile)
+        document.getElementById('sidebarOverlay').addEventListener('click', function() {
+            toggleSidebar();
+        });
+
+        // Handle responsive behavior
+        window.addEventListener('resize', function() {
+            const sidebar = document.getElementById('sidebar');
+            const overlay = document.getElementById('sidebarOverlay');
+            const header = document.getElementById('header');
+            const mainContent = document.getElementById('mainContent');
+            
+            if (window.innerWidth > 768) {
+                sidebar.classList.remove('open');
+                overlay.classList.remove('show');
+            } else {
+                header.classList.remove('full-width');
+                mainContent.classList.remove('full-width');
+                sidebar.classList.remove('closed');
+            }
+        });
+
+        // Active menu highlighting
+        document.querySelectorAll('.menu-item').forEach(item => {
+            item.addEventListener('click', function(e) {
+                // Don't change active state for items with submenus
+                if (!this.querySelector('.arrow')) {
+                    document.querySelectorAll('.menu-item').forEach(menuItem => {
+                        menuItem.classList.remove('active');
+                    });
+                    this.classList.add('active');
+                }
+            });
+        });
+    </script>
+
+    {% block extra_js %}{% endblock %}
+</body>
+</html>
