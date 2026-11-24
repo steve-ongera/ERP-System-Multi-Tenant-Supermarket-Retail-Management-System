@@ -1,613 +1,656 @@
-from django.shortcuts import render, redirect, get_object_or_404
-from django.contrib.auth.decorators import login_required
-from django.http import JsonResponse
-from django.views.decorators.http import require_http_methods
-from django.db.models import Q, Sum, Count, F
+"""
+API views. Business rules live in services.py; views handle HTTP, permissions and tenancy.
+"""
+import logging
+from datetime import date, timedelta
+
+from django.db.models import Sum
+from django.db.models.functions import Coalesce
 from django.utils import timezone
-from decimal import Decimal
-import json
-import uuid
-from datetime import datetime
+from rest_framework import permissions, status, viewsets
+from rest_framework.authtoken.models import Token
+from rest_framework.decorators import action
+from rest_framework.response import Response
+from rest_framework.views import APIView
 
 from .models import (
-    Product, Stock, Sale, SaleItem, Payment, Customer,
-    Branch, Category, MpesaTransaction, Shift, StockMovement
+    AuditLog, Branch, Category, Customer, Employee, Expense, MpesaTransaction,
+    Notification, Payment, Product, Promotion, PurchaseOrder, Sale, SaleReturn,
+    Shift, StockLevel, StockMovement, Supplier, TenantSettings,
+)
+from .serializers import (
+    AuditLogSerializer, BranchSerializer, CategorySerializer, CheckoutSerializer,
+    CustomerSerializer, EmployeeSerializer, ExpenseSerializer, LoginSerializer,
+    MpesaTransactionSerializer, NotificationSerializer, PaymentSerializer,
+    ProductSerializer, PromotionSerializer, PurchaseOrderSerializer,
+    ReceivePurchaseOrderSerializer, SaleReturnSerializer, SaleSerializer,
+    ShiftCloseSerializer, ShiftSerializer, StkPushSerializer,
+    StockAdjustmentSerializer, StockLevelSerializer, StockMovementSerializer,
+    StockTransferSerializer, SupplierSerializer, TenantSettingsSerializer,
+    UserSerializer,
+)
+from .services import (
+    MpesaService, PurchaseService, ReportService, SaleService, ServiceError,
+    ShiftService, StockService,
 )
 
+logger = logging.getLogger(__name__)
 
-@login_required
-def pos_view(request):
-    """Main POS interface"""
+ADMIN_ROLES = {"super_admin", "tenant_admin"}
+MANAGER_ROLES = ADMIN_ROLES | {"branch_manager"}
+
+
+# ---------------------------------------------------------------------------
+# Permissions
+# ---------------------------------------------------------------------------
+class RolePermission(permissions.BasePermission):
+    """
+    Views set `write_roles`; any authenticated user can read, only those roles can write.
+    Leave `write_roles` as None to allow every authenticated user to write.
+    """
+
+    def has_permission(self, request, view):
+        if not (request.user and request.user.is_authenticated):
+            return False
+        if request.method in permissions.SAFE_METHODS or request.user.is_superuser:
+            return True
+        roles = getattr(view, "write_roles", None)
+        return roles is None or request.user.user_type in roles
+
+
+# ---------------------------------------------------------------------------
+# Base classes
+# ---------------------------------------------------------------------------
+class TenantScopedViewSet(viewsets.ModelViewSet):
+    """
+    Restricts every query to the caller's tenant and stamps new rows with it.
+    Branch-level staff are additionally limited to their own branch when the model
+    has a `branch` field and `branch_scoped = True`.
+    """
+
+    permission_classes = [RolePermission]
+    tenant_field = "tenant"
+    branch_scoped = False
+    write_roles = None
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        user = self.request.user
+        if not user.is_superuser:
+            qs = qs.filter(**{self.tenant_field: user.tenant})
+        if self.branch_scoped and user.user_type not in ADMIN_ROLES and user.branch_id:
+            qs = qs.filter(branch=user.branch)
+        return qs
+
+    def perform_create(self, serializer):
+        extra = {}
+        if self.tenant_field == "tenant":
+            extra["tenant"] = self.request.user.tenant
+        if "created_by" in serializer.Meta.model._meta.fields_map or hasattr(
+            serializer.Meta.model, "created_by"
+        ):
+            extra["created_by"] = self.request.user
+        serializer.save(**extra)
+
+
+def service_error_response(exc):
+    return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+
+def parse_range(request, default_days=30):
+    today = timezone.localdate()
+    try:
+        end = date.fromisoformat(request.query_params.get("end", ""))
+    except ValueError:
+        end = today
+    try:
+        start = date.fromisoformat(request.query_params.get("start", ""))
+    except ValueError:
+        start = end - timedelta(days=default_days - 1)
+    return start, end
+
+
+def report_branch(request):
+    branch_id = request.query_params.get("branch")
     user = request.user
-    
-    # Ensure user has access to POS
-    if user.user_type not in ['super_admin', 'tenant_admin', 'branch_manager', 'cashier']:
-        return redirect('dashboard')
-    
-    # Get user's branch
-    branch = user.branch if user.branch else user.tenant.branches.filter(is_main_branch=True).first()
-    
-    if not branch:
-        return redirect('dashboard')
-    
-    # Get categories for filtering
-    categories = Category.objects.filter(
-        tenant=user.tenant,
-        is_active=True
-    ).order_by('name')
-    
-    # Get active shift for current user
-    active_shift = Shift.objects.filter(
-        user=user,
-        branch=branch,
-        is_closed=False
-    ).first()
-    
-    context = {
-        'branch': branch,
-        'categories': categories,
-        'active_shift': active_shift,
-        'tenant': user.tenant,
-    }
-    
-    return render(request, 'pos/pos.html', context)
+    if user.user_type not in ADMIN_ROLES and user.branch_id:
+        return user.branch  # branch staff only see their branch
+    return Branch.objects.filter(pk=branch_id, tenant=user.tenant).first() if branch_id else None
 
 
-@login_required
-@require_http_methods(["GET"])
-def search_products(request):
-    """Search products with autocomplete"""
-    query = request.GET.get('q', '').strip()
-    branch_id = request.GET.get('branch_id')
-    category_id = request.GET.get('category_id')
-    
-    if not query or len(query) < 2:
-        return JsonResponse({'products': []})
-    
-    user = request.user
-    branch = get_object_or_404(Branch, id=branch_id, tenant=user.tenant)
-    
-    # Search products
-    products = Product.objects.filter(
-        tenant=user.tenant,
-        is_active=True
-    ).filter(
-        Q(name__icontains=query) |
-        Q(sku__icontains=query) |
-        Q(barcode__icontains=query)
-    )
-    
-    if category_id:
-        products = products.filter(category_id=category_id)
-    
-    # Get stock information
-    products = products.select_related('category').prefetch_related('stocks')
-    
-    products_data = []
-    for product in products[:20]:  # Limit to 20 results
+# ---------------------------------------------------------------------------
+# Authentication
+# ---------------------------------------------------------------------------
+class LoginView(APIView):
+    permission_classes = [permissions.AllowAny]
+    throttle_scope = "login"
+
+    def post(self, request):
+        serializer = LoginSerializer(data=request.data, context={"request": request})
+        serializer.is_valid(raise_exception=True)
+        user = serializer.validated_data["user"]
+        token, _ = Token.objects.get_or_create(user=user)
+        AuditLog.objects.create(
+            tenant=user.tenant, user=user, action="login",
+            ip_address=request.META.get("REMOTE_ADDR"),
+            user_agent=request.META.get("HTTP_USER_AGENT", "")[:255],
+        )
+        return Response({"token": token.key, "user": UserSerializer(user).data})
+
+
+class LogoutView(APIView):
+    def post(self, request):
+        Token.objects.filter(user=request.user).delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class MeView(APIView):
+    def get(self, request):
+        return Response(UserSerializer(request.user).data)
+
+
+# ---------------------------------------------------------------------------
+# Organisation
+# ---------------------------------------------------------------------------
+class BranchViewSet(TenantScopedViewSet):
+    queryset = Branch.objects.all()
+    serializer_class = BranchSerializer
+    write_roles = ADMIN_ROLES
+    search_fields = ["name", "code", "address"]
+
+
+class UserViewSet(TenantScopedViewSet):
+    queryset = UserSerializer.Meta.model.objects.all()
+    serializer_class = UserSerializer
+    write_roles = ADMIN_ROLES
+    search_fields = ["username", "first_name", "last_name", "email"]
+    filterset_fields = ["user_type", "branch", "is_active"]
+
+    def perform_create(self, serializer):
+        serializer.save(tenant=self.request.user.tenant)
+
+
+class EmployeeViewSet(TenantScopedViewSet):
+    queryset = Employee.objects.select_related("user")
+    serializer_class = EmployeeSerializer
+    write_roles = ADMIN_ROLES
+
+
+class TenantSettingsView(APIView):
+    """GET/PUT the current tenant's settings (one row per tenant)."""
+
+    def _get(self, request):
+        obj, _ = TenantSettings.objects.get_or_create(tenant=request.user.tenant)
+        return obj
+
+    def get(self, request):
+        return Response(TenantSettingsSerializer(self._get(request)).data)
+
+    def put(self, request):
+        if request.user.user_type not in ADMIN_ROLES and not request.user.is_superuser:
+            return Response(status=status.HTTP_403_FORBIDDEN)
+        serializer = TenantSettingsSerializer(self._get(request), data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data)
+
+
+# ---------------------------------------------------------------------------
+# Inventory
+# ---------------------------------------------------------------------------
+INVENTORY_WRITERS = MANAGER_ROLES | {"inventory_manager"}
+
+
+class CategoryViewSet(TenantScopedViewSet):
+    queryset = Category.objects.all()
+    serializer_class = CategorySerializer
+    write_roles = INVENTORY_WRITERS
+    search_fields = ["name"]
+
+
+class SupplierViewSet(TenantScopedViewSet):
+    queryset = Supplier.objects.all()
+    serializer_class = SupplierSerializer
+    write_roles = INVENTORY_WRITERS
+    search_fields = ["name", "phone", "email"]
+
+
+class ProductViewSet(TenantScopedViewSet):
+    queryset = Product.objects.select_related("category").prefetch_related("stock_levels")
+    serializer_class = ProductSerializer
+    write_roles = INVENTORY_WRITERS
+    search_fields = ["name", "sku", "barcode"]
+    filterset_fields = ["category", "is_active"]
+    ordering_fields = ["name", "selling_price", "created_at"]
+
+    @action(detail=False, methods=["get"])
+    def lookup(self, request):
+        """Exact barcode / SKU lookup used by the POS scanner."""
+        code = request.query_params.get("code", "").strip()
+        product = self.get_queryset().filter(is_active=True).filter(
+            barcode=code
+        ).first() or self.get_queryset().filter(is_active=True, sku__iexact=code).first()
+        if product is None:
+            return Response({"detail": "Product not found."}, status=status.HTTP_404_NOT_FOUND)
+        return Response(self.get_serializer(product).data)
+
+
+class StockLevelViewSet(viewsets.ReadOnlyModelViewSet):
+    queryset = StockLevel.objects.select_related("product", "branch")
+    serializer_class = StockLevelSerializer
+    filterset_fields = ["branch", "product"]
+    search_fields = ["product__name", "product__sku"]
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        user = self.request.user
+        if not user.is_superuser:
+            qs = qs.filter(product__tenant=user.tenant)
+        if user.user_type not in ADMIN_ROLES and user.branch_id:
+            qs = qs.filter(branch=user.branch)
+        return qs
+
+    @action(detail=False, methods=["get"])
+    def low(self, request):
+        branch = report_branch(request)
+        qs = StockService.low_stock_queryset(request.user.tenant, branch)
+        return Response(self.get_serializer(qs, many=True).data)
+
+
+class StockMovementViewSet(TenantScopedViewSet):
+    queryset = StockMovement.objects.select_related("product", "branch")
+    serializer_class = StockMovementSerializer
+    http_method_names = ["get", "head", "options"]
+    filterset_fields = ["branch", "product", "movement_type"]
+    branch_scoped = True
+
+
+class StockActionsViewSet(viewsets.ViewSet):
+    """Stock adjustments and transfers (always go through StockService)."""
+
+    permission_classes = [RolePermission]
+    write_roles = INVENTORY_WRITERS
+
+    @action(detail=False, methods=["post"])
+    def adjust(self, request):
+        serializer = StockAdjustmentSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
         try:
-            stock = product.stocks.get(branch=branch)
-            available_qty = stock.available_quantity
-        except Stock.DoesNotExist:
-            available_qty = 0
-        
-        products_data.append({
-            'id': str(product.id),
-            'name': product.name,
-            'sku': product.sku,
-            'barcode': product.barcode,
-            'selling_price': float(product.selling_price),
-            'final_price': float(product.final_price),
-            'discount_percentage': float(product.discount_percentage),
-            'tax_percentage': float(product.tax_percentage),
-            'available_quantity': available_qty,
-            'unit_of_measure': product.unit_of_measure,
-            'image': product.image.url if product.image else None,
-            'category': product.category.name if product.category else 'N/A'
-        })
-    
-    return JsonResponse({'products': products_data})
+            level = StockService.adjust(user=request.user, **data)
+        except ServiceError as exc:
+            return service_error_response(exc)
+        return Response(StockLevelSerializer(level).data, status=status.HTTP_201_CREATED)
 
-
-@login_required
-@require_http_methods(["GET"])
-def get_product_by_barcode(request):
-    """Get product details by barcode scan"""
-    barcode = request.GET.get('barcode', '').strip()
-    branch_id = request.GET.get('branch_id')
-    
-    if not barcode:
-        return JsonResponse({'error': 'No barcode provided'}, status=400)
-    
-    user = request.user
-    branch = get_object_or_404(Branch, id=branch_id, tenant=user.tenant)
-    
-    try:
-        product = Product.objects.select_related('category').get(
-            tenant=user.tenant,
-            barcode=barcode,
-            is_active=True
-        )
-        
-        # Get stock
+    @action(detail=False, methods=["post"])
+    def transfer(self, request):
+        serializer = StockTransferSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
         try:
-            stock = product.stocks.get(branch=branch)
-            available_qty = stock.available_quantity
-        except Stock.DoesNotExist:
-            available_qty = 0
-        
-        product_data = {
-            'id': str(product.id),
-            'name': product.name,
-            'sku': product.sku,
-            'barcode': product.barcode,
-            'selling_price': float(product.selling_price),
-            'final_price': float(product.final_price),
-            'discount_percentage': float(product.discount_percentage),
-            'tax_percentage': float(product.tax_percentage),
-            'available_quantity': available_qty,
-            'unit_of_measure': product.unit_of_measure,
-            'image': product.image.url if product.image else None,
-            'category': product.category.name if product.category else 'N/A'
-        }
-        
-        return JsonResponse({'success': True, 'product': product_data})
-        
-    except Product.DoesNotExist:
-        return JsonResponse({'error': 'Product not found'}, status=404)
+            ref = StockService.transfer(user=request.user, **serializer.validated_data)
+        except ServiceError as exc:
+            return service_error_response(exc)
+        return Response({"reference": ref}, status=status.HTTP_201_CREATED)
 
-
-@login_required
-@require_http_methods(["GET"])
-def get_popular_products(request):
-    """Get most bought products"""
-    branch_id = request.GET.get('branch_id')
-    limit = int(request.GET.get('limit', 12))
-    
-    user = request.user
-    branch = get_object_or_404(Branch, id=branch_id, tenant=user.tenant)
-    
-    # Get popular products based on sales
-    popular_products = Product.objects.filter(
-        tenant=user.tenant,
-        is_active=True,
-        sale_items__sale__branch=branch
-    ).annotate(
-        total_sold=Sum('sale_items__quantity')
-    ).order_by('-total_sold')[:limit]
-    
-    products_data = []
-    for product in popular_products:
-        try:
-            stock = product.stocks.get(branch=branch)
-            available_qty = stock.available_quantity
-        except Stock.DoesNotExist:
-            available_qty = 0
-        
-        products_data.append({
-            'id': str(product.id),
-            'name': product.name,
-            'sku': product.sku,
-            'selling_price': float(product.selling_price),
-            'final_price': float(product.final_price),
-            'discount_percentage': float(product.discount_percentage),
-            'tax_percentage': float(product.tax_percentage),
-            'available_quantity': available_qty,
-            'unit_of_measure': product.unit_of_measure,
-            'image': product.image.url if product.image else None,
-        })
-    
-    return JsonResponse({'products': products_data})
-
-
-@login_required
-@require_http_methods(["GET"])
-def search_customers(request):
-    """Search customers with autocomplete"""
-    query = request.GET.get('q', '').strip()
-    
-    if not query or len(query) < 2:
-        return JsonResponse({'customers': []})
-    
-    user = request.user
-    
-    customers = Customer.objects.filter(
-        tenant=user.tenant,
-        is_active=True
-    ).filter(
-        Q(first_name__icontains=query) |
-        Q(last_name__icontains=query) |
-        Q(phone__icontains=query) |
-        Q(customer_code__icontains=query)
-    )[:10]
-    
-    customers_data = [{
-        'id': str(c.id),
-        'name': f"{c.first_name} {c.last_name}",
-        'customer_code': c.customer_code,
-        'phone': c.phone,
-        'customer_type': c.customer_type,
-        'loyalty_points': c.loyalty_points,
-        'credit_limit': float(c.credit_limit),
-        'current_balance': float(c.current_balance)
-    } for c in customers]
-    
-    return JsonResponse({'customers': customers_data})
-
-
-@login_required
-@require_http_methods(["POST"])
-def process_sale(request):
-    """Process a sale transaction"""
-    try:
-        data = json.loads(request.body)
-        user = request.user
-        
-        # Validate data
-        items = data.get('items', [])
-        customer_id = data.get('customer_id')
-        payment_method = data.get('payment_method')
-        amount_paid = Decimal(str(data.get('amount_paid', 0)))
-        mpesa_phone = data.get('mpesa_phone')
-        branch_id = data.get('branch_id')
-        
-        if not items:
-            return JsonResponse({'error': 'No items in cart'}, status=400)
-        
-        if not payment_method:
-            return JsonResponse({'error': 'Payment method required'}, status=400)
-        
-        branch = get_object_or_404(Branch, id=branch_id, tenant=user.tenant)
-        
-        # Get or create customer
-        customer = None
-        if customer_id:
-            customer = get_object_or_404(Customer, id=customer_id, tenant=user.tenant)
-        
-        # Calculate totals
-        subtotal = Decimal('0')
-        tax_amount = Decimal('0')
-        discount_amount = Decimal('0')
-        
-        for item in items:
-            item_subtotal = Decimal(str(item['final_price'])) * Decimal(str(item['quantity']))
-            item_discount = Decimal(str(item['selling_price'])) * Decimal(str(item['discount_percentage'])) / 100 * Decimal(str(item['quantity']))
-            item_tax = item_subtotal * Decimal(str(item['tax_percentage'])) / 100
-            
-            subtotal += item_subtotal
-            discount_amount += item_discount
-            tax_amount += item_tax
-        
-        total_amount = subtotal + tax_amount
-        change_given = amount_paid - total_amount if amount_paid >= total_amount else Decimal('0')
-        
-        # Generate invoice number
-        invoice_number = f"INV-{timezone.now().strftime('%Y%m%d')}-{uuid.uuid4().hex[:8].upper()}"
-        
-        # Create sale
-        sale = Sale.objects.create(
-            tenant=user.tenant,
-            branch=branch,
-            customer=customer,
-            invoice_number=invoice_number,
-            subtotal=subtotal,
-            tax_amount=tax_amount,
-            discount_amount=discount_amount,
-            total_amount=total_amount,
-            amount_paid=amount_paid,
-            change_given=change_given,
-            payment_status='paid' if amount_paid >= total_amount else 'partial',
-            sale_type='pos',
-            created_by=user
-        )
-        
-        # Create sale items and update stock
-        for item_data in items:
-            product = get_object_or_404(Product, id=item_data['id'], tenant=user.tenant)
-            
-            # Create sale item
-            SaleItem.objects.create(
-                sale=sale,
-                product=product,
-                quantity=item_data['quantity'],
-                unit_price=Decimal(str(item_data['selling_price'])),
-                discount_percentage=Decimal(str(item_data['discount_percentage'])),
-                tax_percentage=Decimal(str(item_data['tax_percentage'])),
-                subtotal=Decimal(str(item_data['final_price'])) * Decimal(str(item_data['quantity']))
-            )
-            
-            # Update stock
-            stock = Stock.objects.get(product=product, branch=branch)
-            stock.quantity -= item_data['quantity']
-            stock.save()
-            
-            # Create stock movement
-            StockMovement.objects.create(
-                product=product,
-                branch=branch,
-                movement_type='sale',
-                quantity=-item_data['quantity'],
-                unit_cost=product.cost_price,
-                reference_number=invoice_number,
-                created_by=user
-            )
-        
-        # Handle M-Pesa payment
-        if payment_method == 'mpesa':
-            # Create payment record
-            payment = Payment.objects.create(
-                tenant=user.tenant,
-                sale=sale,
-                customer=customer,
-                transaction_id=f"PAY-{uuid.uuid4().hex[:12].upper()}",
-                payment_method='mpesa',
-                amount=amount_paid,
-                mpesa_phone_number=mpesa_phone,
-                created_by=user
-            )
-            
-            # Initiate M-Pesa STK Push
-            # This will be handled by the frontend JavaScript
-            return JsonResponse({
-                'success': True,
-                'sale_id': str(sale.id),
-                'invoice_number': invoice_number,
-                'payment_id': str(payment.id),
-                'initiate_mpesa': True,
-                'mpesa_phone': mpesa_phone,
-                'amount': float(amount_paid)
-            })
-        else:
-            # Create payment for other methods
-            Payment.objects.create(
-                tenant=user.tenant,
-                sale=sale,
-                customer=customer,
-                transaction_id=f"PAY-{uuid.uuid4().hex[:12].upper()}",
-                payment_method=payment_method,
-                amount=amount_paid,
-                created_by=user
-            )
-            
-            return JsonResponse({
-                'success': True,
-                'sale_id': str(sale.id),
-                'invoice_number': invoice_number,
-                'total_amount': float(total_amount),
-                'change_given': float(change_given)
-            })
-    
-    except Exception as e:
-        return JsonResponse({'error': str(e)}, status=500)
-
-
-@login_required
-@require_http_methods(["POST"])
-def initiate_mpesa_payment(request):
-    """Initiate M-Pesa STK Push"""
-    try:
-        data = json.loads(request.body)
-        phone_number = data.get('phone_number')
-        amount = data.get('amount')
-        payment_id = data.get('payment_id')
-        
-        # Normalize phone number
-        if phone_number.startswith('0'):
-            phone_number = '254' + phone_number[1:]
-        elif phone_number.startswith('+'):
-            phone_number = phone_number[1:]
-        
-        # Get tenant settings
-        user = request.user
-        settings = user.tenant.settings
-        
-        if not settings.mpesa_enabled:
-            return JsonResponse({'error': 'M-Pesa not enabled'}, status=400)
-        
-        # Here you would integrate with M-Pesa API
-        # For now, create a transaction record
-        merchant_request_id = f"MR-{uuid.uuid4().hex[:12].upper()}"
-        checkout_request_id = f"CR-{uuid.uuid4().hex[:12].upper()}"
-        
-        mpesa_transaction = MpesaTransaction.objects.create(
-            tenant=user.tenant,
-            payment_id=payment_id,
-            merchant_request_id=merchant_request_id,
-            checkout_request_id=checkout_request_id,
-            phone_number=phone_number,
-            amount=Decimal(str(amount)),
-            transaction_type='stk_push',
-            status='pending'
-        )
-        
-        # TODO: Implement actual M-Pesa STK Push API call
-        # For now, return success
-        
-        return JsonResponse({
-            'success': True,
-            'merchant_request_id': merchant_request_id,
-            'checkout_request_id': checkout_request_id,
-            'message': 'STK Push initiated. Please check your phone.'
-        })
-        
-    except Exception as e:
-        return JsonResponse({'error': str(e)}, status=500)
-
-
-@login_required
-@require_http_methods(["GET"])
-def check_mpesa_status(request):
-    """Check M-Pesa transaction status"""
-    checkout_request_id = request.GET.get('checkout_request_id')
-    
-    if not checkout_request_id:
-        return JsonResponse({'error': 'Checkout request ID required'}, status=400)
-    
-    try:
-        transaction = MpesaTransaction.objects.get(
-            checkout_request_id=checkout_request_id,
-            tenant=request.user.tenant
-        )
-        
-        return JsonResponse({
-            'success': True,
-            'status': transaction.status,
-            'result_code': transaction.result_code,
-            'result_description': transaction.result_description,
-            'mpesa_receipt_number': transaction.mpesa_receipt_number
-        })
-        
-    except MpesaTransaction.DoesNotExist:
-        return JsonResponse({'error': 'Transaction not found'}, status=404)
-
-
-@login_required
-@require_http_methods(["POST"])
-def mpesa_callback(request):
-    """M-Pesa callback endpoint"""
-    try:
-        data = json.loads(request.body)
-        
-        # Extract M-Pesa callback data
-        # This structure depends on your M-Pesa integration
-        checkout_request_id = data.get('Body', {}).get('stkCallback', {}).get('CheckoutRequestID')
-        result_code = data.get('Body', {}).get('stkCallback', {}).get('ResultCode')
-        result_desc = data.get('Body', {}).get('stkCallback', {}).get('ResultDesc')
-        
-        if checkout_request_id:
-            transaction = MpesaTransaction.objects.get(
-                checkout_request_id=checkout_request_id
-            )
-            
-            if result_code == '0':
-                # Success
-                transaction.status = 'success'
-                transaction.result_code = result_code
-                transaction.result_description = result_desc
-                
-                # Extract receipt number
-                callback_metadata = data.get('Body', {}).get('stkCallback', {}).get('CallbackMetadata', {}).get('Item', [])
-                for item in callback_metadata:
-                    if item.get('Name') == 'MpesaReceiptNumber':
-                        transaction.mpesa_receipt_number = item.get('Value')
-                        break
-                
-                transaction.callback_data = data
-                transaction.transaction_date = timezone.now()
-                transaction.save()
-                
-                # Update payment
-                if transaction.payment:
-                    transaction.payment.mpesa_receipt_number = transaction.mpesa_receipt_number
-                    transaction.payment.save()
-                    
-                    # Update sale status
-                    if transaction.payment.sale:
-                        transaction.payment.sale.payment_status = 'paid'
-                        transaction.payment.sale.save()
-            else:
-                # Failed
-                transaction.status = 'failed'
-                transaction.result_code = result_code
-                transaction.result_description = result_desc
-                transaction.callback_data = data
-                transaction.save()
-        
-        return JsonResponse({'ResultCode': 0, 'ResultDesc': 'Success'})
-        
-    except Exception as e:
-        return JsonResponse({'ResultCode': 1, 'ResultDesc': str(e)})
-
-
-@login_required
-@require_http_methods(["POST"])
-def start_shift(request):
-    """Start a new cashier shift"""
-    try:
-        data = json.loads(request.body)
-        opening_cash = Decimal(str(data.get('opening_cash', 0)))
-        opening_notes = data.get('opening_notes', '')
-        
-        user = request.user
-        branch = user.branch if user.branch else user.tenant.branches.filter(is_main_branch=True).first()
-        
-        # Check if user has an active shift
-        active_shift = Shift.objects.filter(user=user, is_closed=False).first()
-        if active_shift:
-            return JsonResponse({'error': 'You already have an active shift'}, status=400)
-        
-        # Generate shift number
-        shift_number = f"SHIFT-{timezone.now().strftime('%Y%m%d-%H%M%S')}"
-        
-        shift = Shift.objects.create(
-            tenant=user.tenant,
-            branch=branch,
-            user=user,
-            shift_number=shift_number,
-            opening_cash=opening_cash,
-            opening_notes=opening_notes
-        )
-        
-        return JsonResponse({
-            'success': True,
-            'shift_id': str(shift.id),
-            'shift_number': shift_number
-        })
-        
-    except Exception as e:
-        return JsonResponse({'error': str(e)}, status=500)
-
-
-@login_required
-@require_http_methods(["POST"])
-def close_shift(request):
-    """Close cashier shift"""
-    try:
-        data = json.loads(request.body)
-        shift_id = data.get('shift_id')
-        closing_cash = Decimal(str(data.get('closing_cash', 0)))
-        closing_notes = data.get('closing_notes', '')
-        
-        user = request.user
-        shift = get_object_or_404(Shift, id=shift_id, user=user, is_closed=False)
-        
-        # Calculate shift totals
-        shift_sales = Sale.objects.filter(
-            branch=shift.branch,
-            created_by=user,
-            created_at__gte=shift.opening_time,
-            created_at__lte=timezone.now()
-        ).aggregate(
-            total_sales=Sum('total_amount'),
-            total_transactions=Count('id'),
-            cash_sales=Sum('payments__amount', filter=Q(payments__payment_method='cash')),
-            mpesa_sales=Sum('payments__amount', filter=Q(payments__payment_method='mpesa')),
-            card_sales=Sum('payments__amount', filter=Q(payments__payment_method='card'))
-        )
-        
-        shift.closing_time = timezone.now()
-        shift.closing_cash = closing_cash
-        shift.closing_notes = closing_notes
-        shift.total_sales = shift_sales['total_sales'] or Decimal('0')
-        shift.total_transactions = shift_sales['total_transactions'] or 0
-        shift.cash_sales = shift_sales['cash_sales'] or Decimal('0')
-        shift.mpesa_sales = shift_sales['mpesa_sales'] or Decimal('0')
-        shift.card_sales = shift_sales['card_sales'] or Decimal('0')
-        
-        # Calculate expected cash
-        shift.expected_cash = shift.opening_cash + shift.cash_sales
-        shift.cash_difference = closing_cash - shift.expected_cash
-        shift.is_closed = True
-        shift.save()
-        
-        return JsonResponse({
-            'success': True,
-            'shift_summary': {
-                'total_sales': float(shift.total_sales),
-                'total_transactions': shift.total_transactions,
-                'cash_difference': float(shift.cash_difference)
+    @action(detail=False, methods=["get"])
+    def expiring(self, request):
+        batches = StockService.expiring_batches(request.user.tenant, branch=report_branch(request))
+        return Response([
+            {
+                "id": b.id, "product": b.product.name, "branch": b.branch.name,
+                "batch_number": b.batch_number, "expiry_date": b.expiry_date,
+                "quantity": b.quantity,
             }
+            for b in batches
+        ])
+
+
+# ---------------------------------------------------------------------------
+# Purchasing
+# ---------------------------------------------------------------------------
+class PurchaseOrderViewSet(TenantScopedViewSet):
+    queryset = PurchaseOrder.objects.select_related("supplier", "branch").prefetch_related(
+        "items__product"
+    )
+    serializer_class = PurchaseOrderSerializer
+    write_roles = INVENTORY_WRITERS
+    filterset_fields = ["status", "supplier", "branch"]
+    search_fields = ["order_number", "supplier__name"]
+
+    @action(detail=True, methods=["post"])
+    def approve(self, request, pk=None):
+        if request.user.user_type not in MANAGER_ROLES and not request.user.is_superuser:
+            return Response(status=status.HTTP_403_FORBIDDEN)
+        try:
+            order = PurchaseService.approve(self.get_object(), request.user)
+        except ServiceError as exc:
+            return service_error_response(exc)
+        return Response(self.get_serializer(order).data)
+
+    @action(detail=True, methods=["post"])
+    def receive(self, request, pk=None):
+        serializer = ReceivePurchaseOrderSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            order = PurchaseService.receive(
+                self.get_object(), serializer.validated_data["items"], request.user
+            )
+        except ServiceError as exc:
+            return service_error_response(exc)
+        return Response(self.get_serializer(order).data)
+
+    @action(detail=True, methods=["post"])
+    def cancel(self, request, pk=None):
+        order = self.get_object()
+        if order.status in ("received", "completed"):
+            return Response({"detail": "Received orders cannot be cancelled."}, status=400)
+        order.status = "cancelled"
+        order.save(update_fields=["status"])
+        return Response(self.get_serializer(order).data)
+
+
+# ---------------------------------------------------------------------------
+# Customers, sales and POS
+# ---------------------------------------------------------------------------
+class CustomerViewSet(TenantScopedViewSet):
+    queryset = Customer.objects.all()
+    serializer_class = CustomerSerializer
+    search_fields = ["name", "phone", "email"]
+    filterset_fields = ["customer_type"]
+
+
+class SaleViewSet(viewsets.ReadOnlyModelViewSet):
+    queryset = Sale.objects.select_related("customer", "cashier", "branch").prefetch_related(
+        "items__product", "payments"
+    )
+    serializer_class = SaleSerializer
+    filterset_fields = ["branch", "status", "customer", "cashier"]
+    search_fields = ["invoice_number", "customer__name"]
+    ordering_fields = ["created_at", "total_amount"]
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        user = self.request.user
+        if not user.is_superuser:
+            qs = qs.filter(tenant=user.tenant)
+        if user.user_type not in MANAGER_ROLES and user.user_type != "accountant":
+            qs = qs.filter(cashier=user)
+        elif user.user_type == "branch_manager" and user.branch_id:
+            qs = qs.filter(branch=user.branch)
+        return qs
+
+    @action(detail=False, methods=["post"])
+    def checkout(self, request):
+        serializer = CheckoutSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            sale = SaleService.checkout(user=request.user, data=serializer.validated_data)
+        except ServiceError as exc:
+            return service_error_response(exc)
+        sale = self.get_queryset().get(pk=sale.pk)
+        return Response(SaleSerializer(sale).data, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=["post"])
+    def void(self, request, pk=None):
+        if request.user.user_type not in MANAGER_ROLES and not request.user.is_superuser:
+            return Response(status=status.HTTP_403_FORBIDDEN)
+        try:
+            sale = SaleService.void(self.get_object(), request.user, request.data.get("reason", ""))
+        except ServiceError as exc:
+            return service_error_response(exc)
+        return Response(self.get_serializer(sale).data)
+
+
+class PaymentViewSet(viewsets.ReadOnlyModelViewSet):
+    queryset = Payment.objects.select_related("sale")
+    serializer_class = PaymentSerializer
+    filterset_fields = ["method", "status", "sale"]
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        return qs if self.request.user.is_superuser else qs.filter(tenant=self.request.user.tenant)
+
+
+class SaleReturnViewSet(TenantScopedViewSet):
+    queryset = SaleReturn.objects.select_related("sale")
+    serializer_class = SaleReturnSerializer
+    filterset_fields = ["status", "reason"]
+
+    def perform_create(self, serializer):
+        serializer.save(tenant=self.request.user.tenant, processed_by=self.request.user)
+
+    @action(detail=True, methods=["post"])
+    def approve(self, request, pk=None):
+        if request.user.user_type not in MANAGER_ROLES and not request.user.is_superuser:
+            return Response(status=status.HTTP_403_FORBIDDEN)
+        obj = self.get_object()
+        if obj.status != "pending":
+            return Response({"detail": "Only pending returns can be approved."}, status=400)
+        obj.status = "approved"
+        obj.approved_by = request.user
+        obj.save(update_fields=["status", "approved_by"])
+        return Response(self.get_serializer(obj).data)
+
+
+# ---------------------------------------------------------------------------
+# Expenses, shifts, promotions
+# ---------------------------------------------------------------------------
+class ExpenseViewSet(TenantScopedViewSet):
+    queryset = Expense.objects.select_related("branch")
+    serializer_class = ExpenseSerializer
+    write_roles = MANAGER_ROLES | {"accountant"}
+    filterset_fields = ["branch", "category", "payment_method"]
+    search_fields = ["description"]
+    branch_scoped = True
+
+
+class ShiftViewSet(TenantScopedViewSet):
+    queryset = Shift.objects.select_related("cashier", "branch")
+    serializer_class = ShiftSerializer
+    http_method_names = ["get", "post", "head", "options"]
+    filterset_fields = ["branch", "cashier", "status"]
+    branch_scoped = True
+
+    def create(self, request, *args, **kwargs):
+        """Open a shift."""
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            shift = ShiftService.open(
+                user=request.user,
+                branch=serializer.validated_data["branch"],
+                opening_cash=serializer.validated_data["opening_cash"],
+            )
+        except ServiceError as exc:
+            return service_error_response(exc)
+        return Response(self.get_serializer(shift).data, status=status.HTTP_201_CREATED)
+
+    @action(detail=False, methods=["get"])
+    def current(self, request):
+        shift = self.get_queryset().filter(cashier=request.user, status="open").first()
+        return Response(self.get_serializer(shift).data if shift else None)
+
+    @action(detail=True, methods=["post"])
+    def close(self, request, pk=None):
+        serializer = ShiftCloseSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            shift = ShiftService.close(self.get_object(), **serializer.validated_data)
+        except ServiceError as exc:
+            return service_error_response(exc)
+        return Response(self.get_serializer(shift).data)
+
+
+class PromotionViewSet(TenantScopedViewSet):
+    queryset = Promotion.objects.all()
+    serializer_class = PromotionSerializer
+    write_roles = MANAGER_ROLES
+    filterset_fields = ["is_active", "discount_type"]
+    search_fields = ["name", "code"]
+
+
+# ---------------------------------------------------------------------------
+# Notifications and audit
+# ---------------------------------------------------------------------------
+class NotificationViewSet(TenantScopedViewSet):
+    queryset = Notification.objects.all()
+    serializer_class = NotificationSerializer
+    http_method_names = ["get", "post", "head", "options"]
+    filterset_fields = ["is_read", "notification_type"]
+
+    @action(detail=False, methods=["post"], url_path="mark-all-read")
+    def mark_all_read(self, request):
+        updated = self.get_queryset().filter(is_read=False).update(is_read=True)
+        return Response({"updated": updated})
+
+    @action(detail=True, methods=["post"], url_path="mark-read")
+    def mark_read(self, request, pk=None):
+        obj = self.get_object()
+        obj.is_read = True
+        obj.save(update_fields=["is_read"])
+        return Response(self.get_serializer(obj).data)
+
+
+class AuditLogViewSet(viewsets.ReadOnlyModelViewSet):
+    queryset = AuditLog.objects.select_related("user")
+    serializer_class = AuditLogSerializer
+    filterset_fields = ["user", "action"]
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        user = self.request.user
+        if user.is_superuser:
+            return qs
+        if user.user_type not in ADMIN_ROLES:
+            return qs.none()
+        return qs.filter(tenant=user.tenant)
+
+
+# ---------------------------------------------------------------------------
+# M-Pesa
+# ---------------------------------------------------------------------------
+class StkPushView(APIView):
+    def post(self, request):
+        serializer = StkPushSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        sale = data.get("sale")
+        if sale and sale.tenant_id != request.user.tenant_id:
+            return Response(status=status.HTTP_404_NOT_FOUND)
+        try:
+            txn = MpesaService().stk_push(
+                tenant=request.user.tenant, phone_number=data["phone_number"],
+                amount=data["amount"], sale=sale,
+                account_reference=data["account_reference"], description=data["description"],
+            )
+        except ServiceError as exc:
+            return service_error_response(exc)
+        return Response(MpesaTransactionSerializer(txn).data, status=status.HTTP_201_CREATED)
+
+
+class MpesaStatusView(APIView):
+    """Polled by the POS to see whether the customer approved the prompt."""
+
+    def get(self, request, checkout_request_id):
+        txn = MpesaTransaction.objects.filter(
+            checkout_request_id=checkout_request_id, tenant=request.user.tenant
+        ).first()
+        if txn is None:
+            return Response(status=status.HTTP_404_NOT_FOUND)
+        return Response(MpesaTransactionSerializer(txn).data)
+
+
+class MpesaCallbackView(APIView):
+    """Public endpoint called by Safaricom. Always answers 200 so it does not retry."""
+
+    authentication_classes = []
+    permission_classes = [permissions.AllowAny]
+    throttle_classes = []
+
+    def post(self, request):
+        try:
+            MpesaService.handle_callback(request.data)
+        except Exception:  # noqa: BLE001 - never let Safaricom see a 500
+            logger.exception("Error processing M-Pesa callback")
+        return Response({"ResultCode": 0, "ResultDesc": "Accepted"})
+
+
+class MpesaTransactionViewSet(viewsets.ReadOnlyModelViewSet):
+    queryset = MpesaTransaction.objects.all()
+    serializer_class = MpesaTransactionSerializer
+    filterset_fields = ["status"]
+    search_fields = ["phone_number", "mpesa_receipt_number"]
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        return qs if self.request.user.is_superuser else qs.filter(tenant=self.request.user.tenant)
+
+
+# ---------------------------------------------------------------------------
+# Reports
+# ---------------------------------------------------------------------------
+class ReportViewSet(viewsets.ViewSet):
+    """Read-only analytics. Branch staff only see their own branch."""
+
+    def _check(self, request):
+        return request.user.user_type in MANAGER_ROLES | {"accountant", "inventory_manager"} \
+            or request.user.is_superuser
+
+    def list(self, request):
+        return Response({"reports": [
+            "dashboard", "daily-sales", "sales-trend", "top-products", "sales-by-category",
+            "profit-loss", "inventory-valuation", "top-customers",
+        ]})
+
+    @action(detail=False, methods=["get"])
+    def dashboard(self, request):
+        tenant, branch = request.user.tenant, report_branch(request)
+        low = StockService.low_stock_queryset(tenant, branch).count()
+        expiring = StockService.expiring_batches(tenant, branch=branch).count()
+        return Response({
+            "today": ReportService.daily_summary(tenant, branch=branch),
+            "trend": ReportService.sales_trend(tenant, 7, branch),
+            "low_stock_count": low,
+            "expiring_count": expiring,
+            "unread_notifications": Notification.objects.filter(tenant=tenant, is_read=False).count(),
         })
-        
-    except Exception as e:
-        return JsonResponse({'error': str(e)}, status=500)
+
+    @action(detail=False, methods=["get"], url_path="daily-sales")
+    def daily_sales(self, request):
+        try:
+            day = date.fromisoformat(request.query_params.get("date", ""))
+        except ValueError:
+            day = None
+        return Response(ReportService.daily_summary(request.user.tenant, day, report_branch(request)))
+
+    @action(detail=False, methods=["get"], url_path="sales-trend")
+    def sales_trend(self, request):
+        days = min(int(request.query_params.get("days", 14)), 90)
+        return Response(ReportService.sales_trend(request.user.tenant, days, report_branch(request)))
+
+    @action(detail=False, methods=["get"], url_path="top-products")
+    def top_products(self, request):
+        start, end = parse_range(request)
+        return Response(ReportService.top_products(request.user.tenant, start, end, report_branch(request)))
+
+    @action(detail=False, methods=["get"], url_path="sales-by-category")
+    def sales_by_category(self, request):
+        start, end = parse_range(request)
+        return Response(ReportService.sales_by_category(request.user.tenant, start, end, report_branch(request)))
+
+    @action(detail=False, methods=["get"], url_path="profit-loss")
+    def profit_loss(self, request):
+        if not self._check(request):
+            return Response(status=status.HTTP_403_FORBIDDEN)
+        start, end = parse_range(request)
+        return Response(ReportService.profit_and_loss(request.user.tenant, start, end, report_branch(request)))
+
+    @action(detail=False, methods=["get"], url_path="inventory-valuation")
+    def inventory_valuation(self, request):
+        if not self._check(request):
+            return Response(status=status.HTTP_403_FORBIDDEN)
+        return Response(ReportService.inventory_valuation(request.user.tenant, report_branch(request)))
+
+    @action(detail=False, methods=["get"], url_path="top-customers")
+    def top_customers(self, request):
+        return Response(ReportService.top_customers(request.user.tenant))
