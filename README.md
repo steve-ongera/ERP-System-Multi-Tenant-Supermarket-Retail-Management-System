@@ -1,6 +1,26 @@
 # ERP System - Multi-Tenant Supermarket & Retail Management System
 
-A comprehensive Enterprise Resource Planning (ERP) system built with Django, designed specifically for supermarkets, grocery stores, and retail businesses in Kenya. The system supports multi-tenancy, multiple branches, POS operations, inventory management, and M-Pesa integration.
+A full-stack Enterprise Resource Planning (ERP) system for supermarkets, grocery stores and retail businesses in Kenya. The backend is a Django REST Framework API and the frontend is a React (Vite) single-page app. The system supports multi-tenancy, multiple branches, POS operations, inventory management and M-Pesa payments.
+
+## Table of Contents
+
+- [Features](#features)
+- [Technology Stack](#technology-stack)
+- [Architecture](#architecture)
+- [Prerequisites](#prerequisites)
+- [Installation](#installation)
+- [Project Structure](#project-structure)
+- [API Reference](#api-reference)
+- [Frontend Guide](#frontend-guide)
+- [User Roles & Permissions](#user-roles--permissions)
+- [Configuration](#configuration)
+- [M-Pesa Integration](#m-pesa-integration)
+- [Reports Available](#reports-available)
+- [Security Features](#security-features)
+- [Testing](#testing)
+- [Deployment](#deployment)
+- [Contributing](#contributing)
+- [Roadmap](#roadmap)
 
 ## Features
 
@@ -20,7 +40,7 @@ A comprehensive Enterprise Resource Planning (ERP) system built with Django, des
 
 #### 3. **Inventory Management**
 - Product catalog with categories and subcategories
-- SKU and barcode management
+- SKU and barcode management, with a barcode lookup endpoint for scanners
 - Multi-branch stock tracking
 - Stock movements tracking (purchases, sales, returns, adjustments, transfers, damages, expiry)
 - Batch tracking with expiry dates
@@ -30,11 +50,12 @@ A comprehensive Enterprise Resource Planning (ERP) system built with Django, des
 #### 4. **Purchase Management**
 - Purchase order creation and approval workflow
 - Supplier management with credit limits
-- Partial and full order receiving
+- Partial and full order receiving (stock is updated on receipt)
 - Purchase order status tracking (Draft, Pending, Approved, Ordered, Received, Completed, Cancelled)
 
 #### 5. **Sales & Point of Sale (POS)**
 - Fast POS interface for quick checkouts
+- Single-request checkout that deducts stock, applies promotions and records payments atomically
 - Invoice generation
 - Customer management (Retail, Wholesale, VIP)
 - Multiple payment methods (Cash, M-Pesa, Card, Bank Transfer, Credit, Cheque)
@@ -84,7 +105,7 @@ A comprehensive Enterprise Resource Planning (ERP) system built with Django, des
 - STK Push for customer payments
 - Transaction logging and reconciliation
 - Sandbox and production environment support
-- Automatic payment confirmation
+- Automatic payment confirmation through the Daraja callback
 
 #### 13. **Notifications**
 - Low stock alerts
@@ -102,16 +123,37 @@ A comprehensive Enterprise Resource Planning (ERP) system built with Django, des
 
 ## Technology Stack
 
-- **Backend:** Django 4.x
-- **Database:** PostgreSQL (recommended) / MySQL / SQLite
-- **Authentication:** Django Auth with custom User model
-- **File Storage:** Django FileField (supports S3/cloud storage)
-- **Payment:** M-Pesa Daraja API
+**Backend**
+- Django 4.2 and Django REST Framework
+- PostgreSQL (recommended) / MySQL / SQLite
+- Token authentication with a custom User model
+- Django FileField for uploads (supports S3/cloud storage)
+- M-Pesa Daraja API
+- Optional: Celery and Redis for background tasks and caching
+
+**Frontend**
+- React 18 with Vite
+- React Router
+- Axios for API calls
+
+## Architecture
+
+```
+React (Vite)  --->  Django REST API  --->  PostgreSQL
+ services/api.js     views.py              models.py
+                      |
+                      +-->  services.py  (business rules: stock, sales, M-Pesa, reports)
+                      +-->  serializers.py (validation and JSON shape)
+```
+
+- **Views** handle HTTP, permissions and tenant scoping. Every query is filtered to the signed-in user's tenant, and branch-level staff only see their own branch.
+- **Services** hold the business logic (checkout, stock adjustments, purchase receiving, shifts, M-Pesa, reports) so it stays in one place and runs inside database transactions.
+- **Frontend** talks to the API only through `src/services/api.js`, which attaches the auth token and normalises errors.
 
 ## Prerequisites
 
-- Python 3.8+
-- Django 4.0+
+- Python 3.8+ (3.10+ recommended)
+- Node.js 18+ and npm
 - PostgreSQL 12+ (recommended) or MySQL 8.0+
 - Redis (for caching and Celery tasks - optional)
 - Celery (for background tasks - optional)
@@ -125,22 +167,18 @@ git clone https://github.com/yourusername/erp-system.git
 cd erp-system
 ```
 
-### 2. Create Virtual Environment
+### 2. Backend Setup
 
 ```bash
+cd backend
 python -m venv venv
 source venv/bin/activate  # On Windows: venv\Scripts\activate
-```
-
-### 3. Install Dependencies
-
-```bash
 pip install -r requirements.txt
 ```
 
-### 4. Environment Configuration
+### 3. Backend Environment Configuration
 
-Create a `.env` file in the project root:
+Create `backend/.env`:
 
 ```env
 # Django Settings
@@ -148,7 +186,7 @@ SECRET_KEY=your-secret-key-here
 DEBUG=True
 ALLOWED_HOSTS=localhost,127.0.0.1
 
-# Database
+# Database (omit DB_ENGINE to use SQLite for quick local development)
 DB_ENGINE=django.db.backends.postgresql
 DB_NAME=erp_system_db
 DB_USER=your_db_user
@@ -156,11 +194,15 @@ DB_PASSWORD=your_db_password
 DB_HOST=localhost
 DB_PORT=5432
 
+# Frontend origins allowed to call the API
+CORS_ALLOWED_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
+CSRF_TRUSTED_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
+
 # M-Pesa Settings
 MPESA_ENVIRONMENT=sandbox  # or production
 MPESA_CONSUMER_KEY=your_consumer_key
 MPESA_CONSUMER_SECRET=your_consumer_secret
-MPESA_SHORTCODE=your_shortcode
+MPESA_SHORTCODE=174379
 MPESA_PASSKEY=your_passkey
 MPESA_CALLBACK_URL=https://yourdomain.com/api/mpesa/callback/
 
@@ -176,58 +218,160 @@ EMAIL_HOST_PASSWORD=your-email-password
 SMS_API_KEY=your_sms_api_key
 SMS_SENDER_ID=your_sender_id
 
-# Static & Media Files
-STATIC_URL=/static/
-MEDIA_URL=/media/
+# Optional
+REDIS_URL=redis://localhost:6379/0
+SENTRY_DSN=
+LOYALTY_KES_PER_POINT=100
+EXPIRY_ALERT_DAYS=30
 ```
 
-### 5. Database Setup
+### 4. Database Setup
 
 ```bash
-# Create database
 python manage.py makemigrations erp_system
 python manage.py migrate
-
-# Create superuser
 python manage.py createsuperuser
 ```
 
-### 6. Load Initial Data (Optional)
+### 5. Load Initial Data (Optional)
 
 ```bash
 python manage.py loaddata initial_data.json
 ```
 
-### 7. Run Development Server
+### 6. Run the Backend
 
 ```bash
 python manage.py runserver
 ```
 
-Visit: `http://localhost:8000/admin/`
+- API: `http://localhost:8000/api/`
+- Admin: `http://localhost:8000/admin/`
+
+### 7. Frontend Setup
+
+In a second terminal:
+
+```bash
+cd frontend
+npm install
+```
+
+Create `frontend/.env`:
+
+```env
+VITE_API_URL=http://localhost:8000/api
+```
+
+Start the Vite dev server:
+
+```bash
+npm run dev
+```
+
+Open `http://localhost:5173` and sign in with a user that belongs to a tenant. The superuser you created in step 4 has no tenant, so first create a tenant, a branch and a tenant admin user in the Django admin.
 
 ## Project Structure
 
 ```
-erp_system/
-├── erp_system/
-│   ├── __init__.py
-│   ├── models.py          # All database models
-│   ├── admin.py           # Django admin configuration
-│   ├── views.py           # API/Views
-│   ├── serializers.py     # DRF serializers (if using REST API)
-│   ├── urls.py            # URL routing
-│   ├── signals.py         # Django signals
-│   ├── utils.py           # Utility functions
-│   ├── permissions.py     # Custom permissions
-│   └── migrations/        # Database migrations
-├── static/                # Static files (CSS, JS, images)
-├── media/                 # User uploaded files
-├── templates/             # HTML templates
-├── requirements.txt       # Python dependencies
-├── manage.py
+erp-system/
+├── backend/
+│   ├── config/
+│   │   ├── settings.py        # Project settings (env-driven)
+│   │   ├── urls.py            # Mounts the API at /api/
+│   │   └── wsgi.py
+│   ├── erp_system/
+│   │   ├── models.py          # All database models
+│   │   ├── admin.py           # Django admin configuration
+│   │   ├── serializers.py     # DRF serializers and request validation
+│   │   ├── services.py        # Business logic (stock, sales, M-Pesa, reports)
+│   │   ├── views.py           # API viewsets and endpoints
+│   │   ├── urls.py            # API routing
+│   │   ├── signals.py         # Django signals
+│   │   ├── utils.py           # Utility functions
+│   │   ├── permissions.py     # Custom permissions
+│   │   └── migrations/        # Database migrations
+│   ├── media/                 # User uploaded files
+│   ├── manage.py
+│   └── requirements.txt       # Python dependencies
+├── frontend/
+│   ├── index.html
+│   ├── package.json
+│   ├── vite.config.js
+│   └── src/
+│       ├── main.jsx           # React entry point, mounts the router
+│       ├── App.jsx            # Routes, auth context, layout and pages
+│       ├── index.css          # Base styles
+│       └── services/
+│           └── api.js         # Axios client and API helpers
 └── README.md
 ```
+
+## API Reference
+
+All endpoints are under `/api/` and, except login and the M-Pesa callback, require the header `Authorization: Token <token>`. List endpoints are paginated (`{count, next, previous, results}`) and support `?search=`, `?ordering=` and field filters.
+
+### Authentication
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/auth/login/` | Returns `{token, user}` |
+| POST | `/auth/logout/` | Invalidates the token |
+| GET | `/auth/me/` | Current user |
+
+### Resources (standard list / create / retrieve / update / delete)
+
+`branches`, `users`, `employees`, `categories`, `suppliers`, `products`, `customers`, `returns`, `expenses`, `promotions`, `purchase-orders`, `notifications`
+
+Read-only: `sales`, `payments`, `stock-levels`, `stock-movements`, `audit-logs`, `mpesa/transactions`
+
+### Custom actions
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/products/lookup/?code=` | Find a product by barcode or SKU |
+| POST | `/sales/checkout/` | Create a sale (items, payments, customer, promotion code) |
+| POST | `/sales/{id}/void/` | Cancel a sale and restore stock (managers) |
+| POST | `/stock/adjust/` | Add or remove stock with a movement record |
+| POST | `/stock/transfer/` | Move stock between branches |
+| GET | `/stock/expiring/` | Batches expiring soon |
+| GET | `/stock-levels/low/` | Items at or below reorder level |
+| POST | `/purchase-orders/{id}/approve/` | Approve a purchase order |
+| POST | `/purchase-orders/{id}/receive/` | Receive goods (partial or full) |
+| GET | `/shifts/current/` | The cashier's open shift |
+| POST | `/shifts/` | Open a shift |
+| POST | `/shifts/{id}/close/` | Close a shift and compute variance |
+| POST | `/mpesa/stk-push/` | Send an STK prompt to a customer |
+| GET | `/mpesa/status/{checkout_request_id}/` | Poll payment status |
+| POST | `/mpesa/callback/` | Public Daraja callback |
+| GET/PUT | `/settings/` | Tenant settings |
+
+### Reports
+
+`GET /reports/dashboard/`, `/reports/daily-sales/`, `/reports/sales-trend/`, `/reports/top-products/`, `/reports/sales-by-category/`, `/reports/profit-loss/`, `/reports/inventory-valuation/`, `/reports/top-customers/`
+
+Date-range reports accept `?start=YYYY-MM-DD&end=YYYY-MM-DD`.
+
+### Example: checkout
+
+```json
+POST /api/sales/checkout/
+{
+  "branch": 1,
+  "customer": 12,
+  "items": [{ "product": 5, "quantity": "2" }],
+  "payments": [{ "method": "cash", "amount": "300.00" }],
+  "promotion_code": "WEEKEND10"
+}
+```
+
+## Frontend Guide
+
+- `src/services/api.js` exports an Axios instance plus helpers grouped by area (`productsApi`, `salesApi`, `mpesaApi`, `reportsApi` and so on). It stores the token in `localStorage`, adds it to every request, and signs the user out when the API returns 401.
+- `errorMessage(error)` converts any API error into a single readable string, and `unwrap(data)` handles both paginated and plain list responses.
+- `App.jsx` defines the routes, an `AuthProvider`, a protected layout with sidebar navigation, and the pages: Dashboard, Point of Sale, Sales, Products, Inventory, Customers, Suppliers, Expenses, Promotions and Shifts.
+- M-Pesa at the POS: checkout saves the sale as pending, `mpesaApi.stkPush` prompts the customer, and `mpesaApi.waitForPayment` polls until the callback marks the payment successful, failed or cancelled.
+- Build for production with `npm run build`; the output is in `frontend/dist`.
 
 ## User Roles & Permissions
 
@@ -298,14 +442,18 @@ Each tenant can configure:
 1. Register for Safaricom Daraja API
 2. Get Consumer Key and Consumer Secret
 3. Configure shortcode and passkey
-4. Set callback URL in `.env`
+4. Set `MPESA_CALLBACK_URL` in `backend/.env` to a public HTTPS URL that points to `/api/mpesa/callback/`
 5. Enable M-Pesa in Tenant Settings
+
+During local development, expose your backend with a tunnelling tool (for example ngrok) so Safaricom can reach the callback.
 
 ### Testing
 
 Use Safaricom sandbox credentials for testing:
 - Shortcode: `174379`
 - Test phone: `254708374149`
+
+Phone numbers are normalised automatically, so `0712345678`, `+254712345678` and `254712345678` are all accepted.
 
 ## Reports Available
 
@@ -335,16 +483,22 @@ Use Safaricom sandbox credentials for testing:
 ## Security Features
 
 - Password hashing with Django's PBKDF2
-- CSRF protection
+- Token authentication and per-tenant data isolation on every endpoint
+- Role-based write permissions
+- CSRF protection and a CORS allow-list
 - SQL injection prevention through ORM
 - XSS protection
+- Request throttling
 - Audit logging of all critical actions
 - IP address tracking
 - Session security
+- HTTPS, secure cookies and HSTS enforced when `DEBUG=False`
 
 ## Testing
 
 ```bash
+cd backend
+
 # Run all tests
 python manage.py test erp_system
 
@@ -362,8 +516,11 @@ coverage report
 
 - [ ] Set `DEBUG=False`
 - [ ] Configure proper `SECRET_KEY`
+- [ ] Set `ALLOWED_HOSTS`, `CORS_ALLOWED_ORIGINS` and `CSRF_TRUSTED_ORIGINS` to your real domains
 - [ ] Set up PostgreSQL/MySQL database
-- [ ] Configure static file serving (nginx/whitenoise)
+- [ ] Run `python manage.py collectstatic` and configure static file serving (nginx/whitenoise)
+- [ ] Build the frontend (`npm run build`) and serve `frontend/dist` from nginx or a CDN
+- [ ] Set `VITE_API_URL` to the production API URL before building
 - [ ] Set up media file storage (S3/Cloud Storage)
 - [ ] Configure HTTPS
 - [ ] Set up backup strategy
@@ -371,11 +528,12 @@ coverage report
 - [ ] Set up monitoring and logging
 - [ ] Configure Celery for background tasks
 - [ ] Set up Redis for caching
+- [ ] Switch `MPESA_ENVIRONMENT` to `production` with live credentials
 
 ### Recommended Deployment Stack
 
 - **Server:** Ubuntu 20.04+ LTS
-- **Web Server:** Nginx
+- **Web Server:** Nginx (serves the React build and proxies `/api/` to Gunicorn)
 - **WSGI:** Gunicorn
 - **Database:** PostgreSQL
 - **Cache:** Redis
@@ -424,6 +582,8 @@ For support and questions:
 ## Acknowledgments
 
 - Django Framework
+- Django REST Framework
+- React and Vite
 - Safaricom Daraja API
 - All open-source libraries used in this project
 
