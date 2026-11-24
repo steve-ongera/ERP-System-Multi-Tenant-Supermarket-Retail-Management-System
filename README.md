@@ -2,7 +2,7 @@
 
 A comprehensive Enterprise Resource Planning (ERP) system built with Django, designed specifically for supermarkets, grocery stores, and retail businesses in Kenya. The system supports multi-tenancy, multiple branches, POS operations, inventory management, and M-Pesa integration.
 
-## 🌟 Features
+## Features
 
 ### Core Modules
 
@@ -100,7 +100,7 @@ A comprehensive Enterprise Resource Planning (ERP) system built with Django, des
 - Change history with JSON storage
 - KRA PIN/Tax ID management
 
-## 🚀 Technology Stack
+## Technology Stack
 
 - **Backend:** Django 4.x
 - **Database:** PostgreSQL (recommended) / MySQL / SQLite
@@ -108,7 +108,7 @@ A comprehensive Enterprise Resource Planning (ERP) system built with Django, des
 - **File Storage:** Django FileField (supports S3/cloud storage)
 - **Payment:** M-Pesa Daraja API
 
-## 📋 Prerequisites
+## Prerequisites
 
 - Python 3.8+
 - Django 4.0+
@@ -116,7 +116,7 @@ A comprehensive Enterprise Resource Planning (ERP) system built with Django, des
 - Redis (for caching and Celery tasks - optional)
 - Celery (for background tasks - optional)
 
-## ⚙️ Installation
+## Installation
 
 ### 1. Clone the Repository
 
@@ -206,7 +206,7 @@ python manage.py runserver
 
 Visit: `http://localhost:8000/admin/`
 
-## 📁 Project Structure
+## Project Structure
 
 ```
 erp_system/
@@ -229,7 +229,7 @@ erp_system/
 └── README.md
 ```
 
-## 🔐 User Roles & Permissions
+## User Roles & Permissions
 
 ### Super Admin
 - Full system access
@@ -271,7 +271,7 @@ erp_system/
 - Manage customers
 - Process orders
 
-## 🔧 Configuration
+## Configuration
 
 ### Tenant Settings
 
@@ -291,7 +291,7 @@ Each tenant can configure:
 3. Assign users to branches
 4. Configure branch-specific settings
 
-## 💳 M-Pesa Integration
+## M-Pesa Integration
 
 ### Setup Steps
 
@@ -307,7 +307,7 @@ Use Safaricom sandbox credentials for testing:
 - Shortcode: `174379`
 - Test phone: `254708374149`
 
-## 📊 Reports Available
+## Reports Available
 
 1. **Sales Reports**
    - Daily sales summary
@@ -332,7 +332,7 @@ Use Safaricom sandbox credentials for testing:
    - Customer purchase history
    - Loyalty points tracking
 
-## 🔒 Security Features
+## Security Features
 
 - Password hashing with Django's PBKDF2
 - CSRF protection
@@ -342,7 +342,7 @@ Use Safaricom sandbox credentials for testing:
 - IP address tracking
 - Session security
 
-## 🧪 Testing
+## Testing
 
 ```bash
 # Run all tests
@@ -356,7 +356,7 @@ coverage run --source='.' manage.py test erp_system
 coverage report
 ```
 
-## 📦 Deployment
+## Deployment
 
 ### Production Checklist
 
@@ -383,7 +383,7 @@ coverage report
 - **Monitoring:** Sentry
 - **SSL:** Let's Encrypt
 
-## 🤝 Contributing
+## Contributing
 
 Contributions are welcome! Please follow these steps:
 
@@ -393,18 +393,18 @@ Contributions are welcome! Please follow these steps:
 4. Push to the branch (`git push origin feature/AmazingFeature`)
 5. Open a Pull Request
 
-## 📝 License
+## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
-## 👥 Support
+## Support
 
 For support and questions:
 - Email: support@yourcompany.com
 - Documentation: https://docs.yourcompany.com
 - Issues: https://github.com/yourusername/erp-system/issues
 
-## 🎯 Roadmap
+## Roadmap
 
 - [ ] Mobile app (React Native)
 - [ ] WhatsApp integration for notifications
@@ -417,11 +417,11 @@ For support and questions:
 - [ ] Customer portal
 - [ ] Supplier portal
 
-## 📸 Screenshots
+## Screenshots
 
 *Add screenshots of your application here*
 
-## 🙏 Acknowledgments
+## Acknowledgments
 
 - Django Framework
 - Safaricom Daraja API
@@ -429,4 +429,4 @@ For support and questions:
 
 ---
 
-**Made with ❤️ for Kenyan retailers**
+**Made for Kenyan retailers**
